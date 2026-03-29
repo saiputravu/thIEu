@@ -1,11 +1,10 @@
+use crate::metal::MetalGPU;
 use memmap2::MmapOptions;
+use objc2::runtime::ProtocolObject;
+use objc2_metal::*;
 use std::fs::File;
 use std::ptr::NonNull;
 
-use dispatch2::DispatchData;
-use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
-use objc2_metal::*;
 pub use safetensors::SafeTensors;
 pub use safetensors::serialize;
 
@@ -13,34 +12,20 @@ mod embeddings;
 mod metal;
 mod model;
 
-static KERNELS_METALLIB: &[u8] = include_bytes!("kernels/kernels.metallib");
-
 fn main() {
-    // TODO: Panics.
-    let device = metal::setup_device().unwrap();
-    println!("device: {:?}", device.name());
+    let gpu = MetalGPU::new_metal_gpu().unwrap();
+    gpu.new_command_queue(String::from("first")).unwrap();
+
+    println!("device: {:?}", gpu.device.name());
+    println!("metal4 supported: {:?}", gpu.metal4_supported);
 
     // Load the compiled metallib
-    let data = DispatchData::from_static_bytes(KERNELS_METALLIB);
-    let library = device
-        .newLibraryWithData_error(&data)
-        .expect("failed to load metallib");
-
-    // Get the scale_tensor kernel function
-    let function_name = NSString::from_str("scale_tensor");
-    let scale_tensor = library
-        .newFunctionWithName(&function_name)
-        .expect("function 'scale_tensor' not found in metallib");
-
-    // Create a compute pipeline state
-    let pipeline = device
-        .newComputePipelineStateWithFunction_error(&scale_tensor)
-        .expect("failed to create compute pipeline state");
-
-    // Create a command queue
-    let command_queue = device
-        .newCommandQueue()
-        .expect("failed to create command queue");
+    let scale_tensor = gpu
+        .load_kernel_file(
+            String::from("./src/kernels/kernels.metallib"),
+            String::from("scale_tensor"),
+        )
+        .unwrap();
 
     // --- Set up test data ---
     let input: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
@@ -54,7 +39,8 @@ fn main() {
     let scale_buffer: objc2::rc::Retained<ProtocolObject<dyn MTLBuffer>>;
 
     unsafe {
-        input_buffer = device
+        input_buffer = gpu
+            .device
             .newBufferWithBytes_length_options(
                 NonNull::new(input.as_ptr() as *mut _).unwrap(),
                 buffer_size,
@@ -63,13 +49,15 @@ fn main() {
             .expect("failed to create input buffer");
     };
 
-    output_buffer = device
+    output_buffer = gpu
+        .device
         .newBufferWithLength_options(buffer_size, MTLResourceOptions::StorageModeShared)
         .expect("failed to create output buffer");
 
     unsafe {
         // Create scale buffer
-        scale_buffer = device
+        scale_buffer = gpu
+            .device
             .newBufferWithBytes_length_options(
                 NonNull::new(&scale as *const f32 as *mut _).unwrap(),
                 std::mem::size_of::<f32>(),

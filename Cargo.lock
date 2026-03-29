@@ -61,19 +61,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "theiu"
-version = "0.1.0"
-dependencies = [
- "block2",
- "dispatch2",
- "memmap2",
- "objc2",
- "objc2-foundation",
- "objc2-metal",
- "safetensors",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -234,6 +221,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "theiu"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "memmap2",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
+ "safetensors",
 ]
 
 [[package]]
