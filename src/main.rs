@@ -20,13 +20,12 @@ fn main() {
     println!("metal4 supported: {:?}", gpu.metal4_supported);
 
     // Load the compiled metallib
-    let scale_tensor = match gpu.load_kernel_file(
-        String::from("./src/kernels/kernels.metallib"),
-        String::from("scale_tensor"),
-    ) {
-        Ok(scale_tensor) => scale_tensor,
-        Err(e) => panic!("{}", e),
-    };
+    let scale_tensor = gpu
+        .load_kernel_file(
+            String::from("./src/kernels/kernels.metallib"),
+            String::from("scale_tensor"),
+        )
+        .unwrap();
 
     // --- Set up test data ---
     let input: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
