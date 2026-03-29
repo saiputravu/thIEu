@@ -111,11 +111,11 @@ impl MetalGPU {
     // Coerce forcing enabling or disabling metal4 support via metal4 argument.
     pub fn new_command_queue(
         &mut self,
-        name: String,
+        name: &String,
         metal4: Option<bool>,
     ) -> Result<(), MetalGPUError> {
         // Check whether the queue already exists, if so error.
-        if self.queues.contains_key(&name) {
+        if self.queues.contains_key(name) {
             return Err(MetalGPUError::KeyError(format!("Key {}", name)));
         }
 
@@ -134,7 +134,7 @@ impl MetalGPU {
         };
         let queue = queue
             .ok_or_else(|| MetalGPUError::CommandQueueCreationError(format!("Key {}", name)))?;
-        self.queues.insert(name, queue);
+        self.queues.insert(name.clone(), queue);
         Ok(())
     }
 

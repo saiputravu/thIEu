@@ -18,8 +18,7 @@ mod model;
 fn main() {
     let mut gpu = MetalGPU::new_metal_gpu().unwrap();
     let queue_name = String::from("first");
-    gpu.new_command_queue(queue_name.clone(), Some(false))
-        .unwrap();
+    gpu.new_command_queue(&queue_name, Some(false)).unwrap();
 
     println!("device: {:?}", gpu.device.name());
     println!("metal4 supported: {:?}", gpu.metal4_supported);
