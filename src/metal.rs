@@ -4,6 +4,7 @@ use objc2_foundation::{NSError, NSString};
 use objc2_metal::{
     MTL4CommandQueue, MTLBuffer, MTLCommandQueue, MTLComputePipelineState,
     MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily, MTLLibrary, MTLResourceOptions,
+    MTLTensorDescriptor,
 };
 use std::{collections::HashMap, ffi::c_void, fs::File, io::Read, ptr::NonNull};
 
@@ -175,4 +176,9 @@ impl MetalGPU {
                 length, options
             )))
     }
+}
+
+pub fn new_tensor_descriptor() -> Retained<MTLTensorDescriptor> {
+    // TODO @cyrusknopf pass args
+    return MTLTensorDescriptor::new();
 }
