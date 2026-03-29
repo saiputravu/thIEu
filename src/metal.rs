@@ -55,6 +55,7 @@ impl From<Retained<NSError>> for MetalGPUError {
     }
 }
 
+// Capturing hardware variance. Queues enable instruction pipelining.
 enum CommandQueue {
     Metal(Retained<ProtocolObject<dyn MTLCommandQueue>>),
     Metal4(Retained<ProtocolObject<dyn MTL4CommandQueue>>),
@@ -64,9 +65,7 @@ pub struct MetalGPU {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     pub metal4_supported: bool,
 
-    // queues allow for pipelining instructions. Here, we keep track
-    // of named command queues for smart routing. We can be dealing
-    // with either.
+    // Named queues allow for smart instruction routing.
     queues: HashMap<String, CommandQueue>,
 }
 
