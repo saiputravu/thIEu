@@ -1,14 +1,11 @@
 use dispatch2::DispatchData;
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_foundation::{
-    NSError, NSObjectNSKeyValueCoding, NSString,
-    NSUbiquitousUserDefaultsCompletedInitialSyncNotification,
-};
+use objc2_foundation::{NSError, NSString};
 use objc2_metal::{
     MTL4CommandQueue, MTLCommandQueue, MTLComputePipelineState, MTLCreateSystemDefaultDevice,
-    MTLDevice, MTLFunction, MTLGPUFamily, MTLLibrary,
+    MTLDevice, MTLGPUFamily, MTLLibrary, MTLTensorDescriptor,
 };
-use std::{collections::HashMap, fs::File, io::Read, ops::Deref};
+use std::{collections::HashMap, fs::File, io::Read};
 
 use crate::metal;
 
@@ -129,4 +126,9 @@ impl MetalGPU {
         self.queues.insert(name, queue);
         Ok(())
     }
+}
+
+pub fn new_tensor_descriptor() -> Retained<MTLTensorDescriptor> {
+    // TODO @cyrusknopf pass args
+    return MTLTensorDescriptor::new();
 }
