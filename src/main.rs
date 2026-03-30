@@ -18,11 +18,11 @@ mod metal;
 mod model;
 
 fn main() {
-    let mut gpu = MetalGPU::new_metal_gpu().unwrap();
-    let first = String::from("first");
-    gpu.new_command_queue(&first, Some(true)).unwrap();
+    let mut gpu = MetalGPU::new().unwrap();
+    let first = "first";
+    gpu.new_command_queue(first, Some(true)).unwrap();
     if gpu.metal4_supported {
-        gpu.new_command_allocator(&first).unwrap();
+        gpu.new_command_allocator(first).unwrap();
     }
 
     println!("device: {:?}", gpu.device.name());
@@ -30,10 +30,7 @@ fn main() {
 
     // Load the compiled metallib
     let scale_tensor = gpu
-        .load_kernel_file(
-            &String::from("./src/kernels/kernels.metallib"),
-            &String::from("scale_tensor"),
-        )
+        .load_kernel_file("./src/kernels/kernels.metallib", "scale_tensor")
         .unwrap();
 
     // --- Set up test data ---
@@ -78,7 +75,7 @@ fn main() {
     };
 
     // Encode and dispatch
-    let command_queue = gpu.get_command_queue(&first).unwrap();
+    let command_queue = gpu.get_command_queue(first).unwrap();
     let args = &[
         (input_buffer.as_ref(), 0, 0),
         (output_buffer.as_ref(), 0, 1),
@@ -110,7 +107,7 @@ fn main() {
             println!("Completed.");
         }
         metal::CommandQueue::Metal4(cq) => {
-            let allocator = gpu.get_command_allocator(&first).unwrap();
+            let allocator = gpu.get_command_allocator(first).unwrap();
             let command_buffer = gpu.new_command_buffer_metal_4(allocator).unwrap();
             command_buffer
                 .fill_with_arguments(

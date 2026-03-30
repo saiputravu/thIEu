@@ -10,14 +10,7 @@ use objc2_metal::{
 };
 use std::{collections::HashMap, ffi::c_void, fs::File, io::Read, ptr::NonNull};
 
-use crate::metal;
-
-pub fn setup_device()
--> Result<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn MTLDevice>>, String> {
-    MTLCreateSystemDefaultDevice().ok_or("unable to create device".to_string())
-}
-
-// TODO(putravu): Fix this mess.
+/// Errors produced by Metal GPU operations.
 #[derive(Debug)]
 pub enum MetalError {
     IoError(std::io::Error),
@@ -31,7 +24,6 @@ pub enum MetalError {
     CommandAllocatorCreationError(String),
     CommandBufferError(String),
     Metal4NotSupportedError,
-    CommitError(String),
 }
 
 impl std::fmt::Display for MetalError {
@@ -41,7 +33,6 @@ impl std::fmt::Display for MetalError {
             MetalError::NSError(retained) => retained.fmt(f),
             MetalError::DeviceError(err_str) => write!(f, "DeviceError: {}", err_str),
             MetalError::FunctionError(err_str) => write!(f, "FunctionError: {}", err_str),
-            MetalError::CommitError(err_str) => write!(f, "CommitError: {}", err_str),
             MetalError::BufferCreationError(err_str) => {
                 write!(f, "BufferCreationError: {}", err_str)
             }
@@ -67,6 +58,15 @@ impl std::fmt::Display for MetalError {
     }
 }
 
+impl std::error::Error for MetalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            MetalError::IoError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 impl From<std::io::Error> for MetalError {
     fn from(error: std::io::Error) -> Self {
         Self::IoError(error)
@@ -78,7 +78,7 @@ impl From<Retained<NSError>> for MetalError {
     }
 }
 
-// Capturing hardware variance. Queues enable instruction pipelining.
+/// A command queue abstraction over Metal and Metal4 hardware variants.
 pub enum CommandQueue {
     Metal(Retained<ProtocolObject<dyn MTLCommandQueue>>),
     Metal4(Retained<ProtocolObject<dyn MTL4CommandQueue>>),
@@ -100,18 +100,18 @@ impl CommandQueue {
     }
 }
 
+/// A command buffer abstraction over Metal and Metal4 hardware variants.
 pub enum CommandBuffer {
     Metal(Retained<ProtocolObject<dyn MTLCommandBuffer>>),
     Metal4(Retained<ProtocolObject<dyn MTL4CommandBuffer>>),
 }
 
 impl CommandBuffer {
-    // TODO(putravu): Comment this function
-    //
-    // TODO(putravu): Fill metal 4 side.
-    // TODO(putravu): In the future there may be a need to de-couple arg tables here.
-    // SAFETY: Note this ends the encoding
-    // Note for metal4, you have to explicitly end the command buffer, otherwise it persists.
+    /// Encodes a compute pass into this command buffer.
+    ///
+    /// Binds `arguments` (buffer, offset, index) to a compute encoder, sets the pipeline state,
+    /// dispatches the threadgroups, and ends encoding. For Metal, `dispatch_type` is required.
+    /// For Metal4, `gpu` is required (to create an argument table).
     pub fn fill_with_arguments(
         &self,
         computation: &ProtocolObject<dyn MTLComputePipelineState>,
@@ -178,10 +178,14 @@ impl CommandBuffer {
         }
     }
 
-    // TODO(putravu): Comment this function
-    //
-    // metal 4 Command_queue needed if there are any Metal 4 command buffers
-    // it only errors in one case.
+    /// Commits one or more command buffers for execution.
+    ///
+    /// Metal command buffers are committed individually. Metal4 command buffers are
+    /// batched and committed together through the provided `command_queue`.
+    ///
+    /// # Safety
+    /// Metal4 command buffers must have had [`end_command_buffer_metal_4`](Self::end_command_buffer_metal_4)
+    /// called before commit.
     pub unsafe fn commit(
         command_buffers: &[&CommandBuffer],
         command_queue: Option<&ProtocolObject<dyn MTL4CommandQueue>>,
@@ -224,9 +228,7 @@ impl CommandBuffer {
         Ok(())
     }
 
-    // TODO(putravu): Comment this function
-    //
-    // SAFETY: Must call this before committing.
+    /// Finalizes a Metal4 command buffer before commit. No-op for Metal command buffers.
     pub fn end_command_buffer_metal_4(&self) {
         match self {
             CommandBuffer::Metal4(cb) => cb.endCommandBuffer(),
@@ -249,19 +251,21 @@ impl CommandBuffer {
     }
 }
 
+/// The primary GPU device handle, managing command queues, allocators, and buffers.
 pub struct MetalGPU {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     pub metal4_supported: bool,
 
-    // Named queues allow for smart instruction routing.
+    /// Named queues for instruction routing.
     queues: HashMap<String, CommandQueue>,
     allocators: HashMap<String, Retained<ProtocolObject<dyn MTL4CommandAllocator>>>,
 }
 
 impl MetalGPU {
-    // new_metal_gpu creates a MetalGPU object.
-    pub fn new_metal_gpu() -> Result<MetalGPU, MetalError> {
-        let device = metal::setup_device().map_err(|e| MetalError::DeviceError(e))?;
+    /// Creates a new `MetalGPU` using the system default Metal device.
+    pub fn new() -> Result<MetalGPU, MetalError> {
+        let device = MTLCreateSystemDefaultDevice()
+            .ok_or_else(|| MetalError::DeviceError("unable to create device".to_string()))?;
         let metal4_supported = device.supportsFamily(MTLGPUFamily::Metal4);
         Ok(MetalGPU {
             device,
@@ -271,12 +275,11 @@ impl MetalGPU {
         })
     }
 
-    // load_kernel_file reads and loads a metallib file, generating a MTLComputePipelinState or
-    // error.
+    /// Loads a compiled `.metallib` file and extracts a compute pipeline for the named function.
     pub fn load_kernel_file(
         &self,
-        filename: &String,
-        libname: &String,
+        filename: &str,
+        libname: &str,
     ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, MetalError> {
         let mut buffer = Vec::new();
         let mut file = File::open(filename)?;
@@ -285,7 +288,7 @@ impl MetalGPU {
             .device
             .newLibraryWithData_error(&DispatchData::from_bytes(&buffer))?;
         let f = library
-            .newFunctionWithName(&NSString::from_str(libname.as_str()))
+            .newFunctionWithName(&NSString::from_str(libname))
             .ok_or_else(|| {
                 MetalError::FunctionError(format!(
                     "Failed to find Metal function '{}' in the compiled library",
@@ -296,13 +299,11 @@ impl MetalGPU {
         Ok(function)
     }
 
-    // new_command_queue instantiates a command queue, which is Metal 4 aware.
-    // Coerce forcing enabling or disabling metal4 support via metal4 argument.
-    //
-    // TODO(putravu): Think whether metal4 should be something like polymorphic variants in ocaml.
+    /// Creates and stores a named command queue, selecting Metal or Metal4 based on
+    /// device capabilities. Override with `metal4` to force a specific variant.
     pub fn new_command_queue(
         &mut self,
-        name: &String,
+        name: &str,
         metal4: Option<bool>,
     ) -> Result<(), MetalError> {
         // Check whether the queue already exists, if so error.
@@ -314,7 +315,7 @@ impl MetalGPU {
         }
 
         // If metal4 is not set, default to device capabilities, preferring metal4.
-        let metal4_supported = metal4.map_or(self.metal4_supported, |x| x);
+        let metal4_supported = metal4.unwrap_or(self.metal4_supported);
 
         // Create a command queue based on supported hardware features.
         let queue = if metal4_supported {
@@ -329,18 +330,21 @@ impl MetalGPU {
         let queue = queue.ok_or_else(|| {
             MetalError::CommandQueueCreationError(format!("Failed insert Key {}", name))
         })?;
-        self.queues.insert(name.clone(), queue);
+        self.queues.insert(name.to_owned(), queue);
         Ok(())
     }
 
-    // TODO(putravu): Comment this function.
-    pub fn get_command_queue(&self, name: &String) -> Result<&CommandQueue, MetalError> {
+    /// Returns a reference to the named command queue, or `KeyError` if not found.
+    pub fn get_command_queue(&self, name: &str) -> Result<&CommandQueue, MetalError> {
         self.queues
             .get(name)
             .ok_or(MetalError::KeyError(format!("Key {} does not exist", name)))
     }
 
-    // TODO(putravu): Comment this function.
+    /// Creates a GPU buffer by copying from the given pointer.
+    ///
+    /// # Safety
+    /// `pointer` must be valid for `length` bytes.
     pub unsafe fn new_buffer_from_bytes(
         &self,
         pointer: NonNull<c_void>,
@@ -359,7 +363,7 @@ impl MetalGPU {
         )))
     }
 
-    // TODO(putravu): Comment this function.
+    /// Allocates a new GPU buffer of the given length and resource options.
     pub fn new_buffer(
         &self,
         length: usize,
@@ -373,10 +377,9 @@ impl MetalGPU {
             )))
     }
 
-    // TODO(putravu): Comment this function
-    //
-    // This should not be used for metal 4, if you want that then look at
-    // `[new_command_buffer_metal_4]`.
+    /// Creates a Metal command buffer from the given command queue.
+    ///
+    /// For Metal4 command buffers, use [`new_command_buffer_metal_4`](Self::new_command_buffer_metal_4).
     pub fn new_command_buffer(
         &self,
         command_queue: &Retained<ProtocolObject<dyn MTLCommandQueue>>,
@@ -389,10 +392,10 @@ impl MetalGPU {
             ))
     }
 
-    // TODO(putravu): Comment this function
-    //
-    // This should ONLY be used for metal 4, if you don't want that then look at
-    // `[new_command_buffer]`.
+    /// Creates a Metal4 command buffer using the given allocator.
+    ///
+    /// Returns `Metal4NotSupportedError` if the device does not support Metal4.
+    /// For standard Metal command buffers, use [`new_command_buffer`](Self::new_command_buffer).
     pub fn new_command_buffer_metal_4(
         &self,
         allocator_ref: &Retained<ProtocolObject<dyn MTL4CommandAllocator>>,
@@ -411,10 +414,10 @@ impl MetalGPU {
         Ok(CommandBuffer::Metal4(command_buffer))
     }
 
-    // TODO(putravu): Comment this function
-    //
-    // Note, this is a Metal4 only feature.
-    pub fn new_command_allocator(&mut self, name: &String) -> Result<(), MetalError> {
+    /// Creates and stores a named Metal4 command allocator.
+    ///
+    /// Metal4 only. Returns an error if the name is already taken or Metal4 is unsupported.
+    pub fn new_command_allocator(&mut self, name: &str) -> Result<(), MetalError> {
         // Check metal supported
         if !self.metal4_supported {
             return Err(MetalError::Metal4NotSupportedError);
@@ -434,22 +437,23 @@ impl MetalGPU {
                     "Failed to create allocator {}",
                     name
                 )))?;
-        self.allocators.insert(name.clone(), allocator);
+        self.allocators.insert(name.to_owned(), allocator);
         Ok(())
     }
 
-    // TODO(putravu): Comment this function
+    /// Returns a reference to the named Metal4 command allocator, or `KeyError` if not found.
     pub fn get_command_allocator(
         &self,
-        name: &String,
+        name: &str,
     ) -> Result<&Retained<ProtocolObject<dyn MTL4CommandAllocator>>, MetalError> {
         self.allocators
             .get(name)
             .ok_or(MetalError::KeyError(format! {"Key error {}", name}))
     }
 
-    // TODO(putravu): Comment this function
-    // TODO(putravu): Think about whether it makes sense to name these.
+    /// Creates a Metal4 argument table with the given buffer bind count.
+    ///
+    /// Metal4 only. Used internally by [`CommandBuffer::fill_with_arguments`] for the Metal4 path.
     pub fn new_argument_table(
         &self,
         max_buffer_bind_count: usize,
@@ -465,9 +469,10 @@ impl MetalGPU {
             .newArgumentTableWithDescriptor_error(&argument_table_descriptor)?;
         Ok(argument_table)
     }
-}
 
-pub fn new_tensor_descriptor() -> Retained<MTLTensorDescriptor> {
-    // TODO @cyrusknopf pass args
-    return MTLTensorDescriptor::new();
+    /// Creates a new tensor descriptor.
+    // TODO(@cyrusknopf): Accept shape/datatype arguments.
+    pub fn new_tensor_descriptor(&self) -> Retained<MTLTensorDescriptor> {
+        MTLTensorDescriptor::new()
+    }
 }
