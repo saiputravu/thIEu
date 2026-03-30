@@ -1,3 +1,4 @@
+use crate::metal::CommandBuffer;
 use crate::metal::MetalGPU;
 use block2::RcBlock;
 use dispatch2::DispatchObject;
@@ -18,8 +19,11 @@ mod model;
 
 fn main() {
     let mut gpu = MetalGPU::new_metal_gpu().unwrap();
-    let queue_name = String::from("first");
-    gpu.new_command_queue(&queue_name, Some(true)).unwrap();
+    let first = String::from("first");
+    gpu.new_command_queue(&first, Some(true)).unwrap();
+    if gpu.metal4_supported {
+        gpu.new_command_allocator(&first).unwrap();
+    }
 
     println!("device: {:?}", gpu.device.name());
     println!("metal4 supported: {:?}", gpu.metal4_supported);
@@ -74,62 +78,56 @@ fn main() {
     };
 
     // Encode and dispatch
-    let command_queue = gpu.get_command_queue(&queue_name).unwrap();
+    let command_queue = gpu.get_command_queue(&first).unwrap();
+    let args = &[
+        (input_buffer.as_ref(), 0, 0),
+        (output_buffer.as_ref(), 0, 1),
+        (scale_buffer.as_ref(), 0, 2),
+    ];
     match command_queue {
         metal::CommandQueue::Metal(cq) => {
-            let command_buffer = cq.commandBuffer().unwrap();
+            let command_buffer = gpu.new_command_buffer(cq).unwrap();
 
-            // Setup the command buffer.
-            let command_encoder = command_buffer.computeCommandEncoder().unwrap();
-            command_encoder.setComputePipelineState(&scale_tensor);
+            command_buffer
+                .fill_with_arguments(
+                    &scale_tensor,
+                    args,
+                    grid_size,
+                    threadgroup_size,
+                    Some(MTLDispatchType::Serial),
+                    None,
+                )
+                .unwrap();
+
             unsafe {
-                command_encoder.setBuffer_offset_atIndex(Some(&input_buffer), 0, 0);
-                command_encoder.setBuffer_offset_atIndex(Some(&output_buffer), 0, 1);
-                command_encoder.setBuffer_offset_atIndex(Some(&scale_buffer), 0, 2);
+                CommandBuffer::commit(&[&command_buffer], None, None).unwrap();
             }
-            command_encoder.dispatchThreadgroups_threadsPerThreadgroup(grid_size, threadgroup_size);
-            command_encoder.endEncoding();
 
-            // Commit and wait till completion.
-            command_buffer.commit();
+            let command_buffer = command_buffer.as_metal().unwrap();
             command_buffer.waitUntilScheduled();
             println!("Scheduled.");
             command_buffer.waitUntilCompleted();
             println!("Completed.");
         }
         metal::CommandQueue::Metal4(cq) => {
-            let allocator = gpu.device.newCommandAllocator().unwrap();
-            let command_buffer = gpu.device.newCommandBuffer().unwrap();
-            command_buffer.beginCommandBufferWithAllocator(&allocator);
-
-            let arg_desc = MTL4ArgumentTableDescriptor::new();
-            arg_desc.setMaxBufferBindCount(3);
-            let argument_table = gpu
-                .device
-                .newArgumentTableWithDescriptor_error(&arg_desc)
+            let allocator = gpu.get_command_allocator(&first).unwrap();
+            let command_buffer = gpu.new_command_buffer_metal_4(allocator).unwrap();
+            command_buffer
+                .fill_with_arguments(
+                    &scale_tensor,
+                    args,
+                    grid_size,
+                    threadgroup_size,
+                    None,
+                    Some(&gpu),
+                )
                 .unwrap();
-            unsafe {
-                argument_table.setAddress_atIndex(input_buffer.gpuAddress(), 0);
-                argument_table.setAddress_atIndex(output_buffer.gpuAddress(), 1);
-                argument_table.setAddress_atIndex(scale_buffer.gpuAddress(), 2);
-            }
+            command_buffer.end_command_buffer_metal_4();
 
-            let command_encoder = command_buffer.computeCommandEncoder().unwrap();
-            command_encoder.setComputePipelineState(&scale_tensor);
-            command_encoder.setArgumentTable(Some(&argument_table));
-            command_encoder.dispatchThreadgroups_threadsPerThreadgroup(grid_size, threadgroup_size);
-            command_encoder.endEncoding();
-
-            command_buffer.endCommandBuffer();
-
-            let mut command_buffers = [NonNull::from(&*command_buffer)];
-            let command_buffers_ptr = NonNull::new(command_buffers.as_mut_ptr()).unwrap();
-
-            let options = MTL4CommitOptions::new();
             let sem = DispatchSemaphore::new(0);
             let sem_clone = sem.retain();
             let callback =
-                block2::RcBlock::new(move |x: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
+                RcBlock::new(move |x: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
                     let feedback = unsafe { x.as_ref() };
                     println!(
                         "Committed: start {:?}, end {:?}, diff {:?}",
@@ -141,8 +139,12 @@ fn main() {
                 });
 
             unsafe {
-                options.addFeedbackHandler(RcBlock::as_ptr(&callback));
-                cq.commit_count_options(command_buffers_ptr, 1, &options);
+                CommandBuffer::commit(
+                    &[&command_buffer],
+                    Some(cq),
+                    Some(RcBlock::as_ptr(&callback)),
+                )
+                .unwrap();
             }
 
             // Block until semaphore is done.
